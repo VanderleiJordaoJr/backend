@@ -1,34 +1,35 @@
-use actix_web::{web, App, HttpServer};
-use diesel::pg::PgConnection;
-use diesel::r2d2::ConnectionManager;
-use dotenvy::dotenv;
-use r2d2::PooledConnection;
-use std::env;
-
-fn establish_connection() -> PooledConnection<ConnectionManager<PgConnection>> {
-    dotenv().ok();
-
-    let database_url = env::var("DATABASE_URL").expect("DATABASE_URL must be set");
-    let manager = ConnectionManager::<PgConnection>::new(&database_url);
-    let pool = r2d2::Pool::builder()
-        .build(manager)
-        .expect("Failed to create pool.");
-    let conn = pool.clone().get().unwrap();
-    conn
-}
+use actix_web::{get, web, App, HttpResponse, HttpServer, Responder};
+use backend::DbPool;
+use backend::{establish_connection, models::*};
+use diesel::prelude::*;
 
 struct AppState {
-    database_connection: PooledConnection<ConnectionManager<PgConnection>>,
+    pub pool: DbPool,
+}
+
+#[get("/products")]
+async fn get_products(data: web::Data<AppState>) -> impl Responder {
+    use backend::schema::products::dsl::*;
+
+    let connection = &mut data.pool.get().unwrap();
+
+    let result: Vec<Product> = products
+        .limit(5)
+        .load::<Product>(connection)
+        .expect("Error loading products");
+
+    HttpResponse::Ok().json(result)
 }
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
-    HttpServer::new(|| {
-        App::new().app_data(web::Data::new(AppState {
-            database_connection: establish_connection(),
-        }))
-    })
-    .bind(("127.0.0.1", 8081))?
-    .run()
-    .await
+    // TODO Add logging tool
+    let app_data = web::Data::new(AppState {
+        pool: establish_connection(),
+    });
+
+    HttpServer::new(move || App::new().app_data(app_data.clone()).service(get_products))
+        .bind(("127.0.0.1", 8081))?
+        .run()
+        .await
 }
